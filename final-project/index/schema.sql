@@ -1,0 +1,2 @@
+-- Owner: Person 1 / shared where required
+-- TODO: Define SQLite schema according to SPEC.md after contracts are frozen.

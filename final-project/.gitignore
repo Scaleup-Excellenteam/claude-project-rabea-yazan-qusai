@@ -1,0 +1,25 @@
+# Secrets
+.env
+
+# Python virtual environments
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Generated databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Generated extraction output (regenerate via extract/*.py + index/*.py)
+data/extracted/*
+!data/extracted/.gitkeep
+
+# Editor / OS clutter
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

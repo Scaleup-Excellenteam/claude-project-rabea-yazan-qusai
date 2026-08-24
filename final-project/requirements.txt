@@ -1,0 +1,5 @@
+pdfplumber
+python-bidi
+anthropic
+streamlit
+pytest
