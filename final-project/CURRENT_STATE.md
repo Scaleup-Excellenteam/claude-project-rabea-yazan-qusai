@@ -257,3 +257,43 @@ Then:
 - Do not redo completed work.
 - Stay inside your owned files unless a shared contract change is
   explicitly agreed by all three team members.
+
+## 11. Person 2 (Course Data) - Implementation Complete (branch `course-data`)
+
+- `extract/tables.py`: geometric row/table extraction for all 6
+  curriculum ids via pdfplumber table geometry - `single_major_fall`,
+  `single_major_spring`, `computational_biology` (flat elective list,
+  no year/semester), `support_center_spread`, `dual_major_fall`,
+  `dual_major_spring`. Fixes fragmented decimals (e.g. `"18.\n5"` ->
+  `18.5`), multi-line cells, footnote markers (`(1)`), and totals rows.
+  Also extracts the 4 specialization clusters (pp. 13-15, prose bullet
+  format) into required/recommended course lists.
+- `extract/catalog.py`: per-course catalog records from the prose
+  blocks on pp. 25-45 (not geometric tables). Confirmed and handled
+  the real duplicate course number `0121503` (two distinct catalog
+  entries, 3.5 credits vs 3 credits) via composite identity
+  (course_number, course_name) - both are preserved, never collapsed.
+- `extract/prereqs.py`: thin wrapper preserving prerequisites text
+  verbatim while also surfacing any course numbers mentioned within it.
+- `index/build_courses.py`: builds a SQLite DB (curricula, courses,
+  table_totals, catalog_courses, clusters, cluster_courses) from the
+  yearbook PDF via the above extractors.
+- `tools/course_tools.py`: `list_curricula`, `get_course_table`,
+  `get_course` matching the JSON shapes in `SPEC.md` section 4/5 as
+  plain dicts (contracts.py still only has `normalize()` - see section
+  5 above; team decided not to add types there unilaterally).
+  `get_course_table` returns a structured `ambiguous_curriculum`/
+  `unknown_curriculum` error (never guesses) and an empty-`rows`+`note`
+  shape for curricula with no table at a given year/semester.
+- Known documented limitation (same spirit as the RTL milestone's
+  documented limitations): the `dual_major_fall` year 2/semester 4
+  table (yearbook p.21, 4th table) has malformed pdfplumber geometry
+  that drops the `course_number`/`total_hours` columns entirely for
+  that one table; `extract/tables.py` surfaces this via an
+  `extraction_warning` field rather than crashing or guessing values.
+  All other 5 curricula's year=2/semester=4 tables parse cleanly.
+- Tests: `tests/test_tables.py`, `tests/test_catalog.py`,
+  `tests/test_prereqs.py`, `tests/test_build_courses.py`,
+  `tests/test_course_tools.py` - 46 new tests, all against the real
+  yearbook PDF (no mocked fixtures for the integration-level tests).
+  Full suite: `python -m pytest -q` from `final-project/` -> 66 passed.
