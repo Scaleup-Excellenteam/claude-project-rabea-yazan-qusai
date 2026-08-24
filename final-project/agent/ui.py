@@ -13,6 +13,8 @@ from pathlib import Path
 
 from agent.loop import answer_question
 from agent.metrics import compute_metrics
+from agent.providers import ProviderConfigurationError, create_provider_manager
+from agent.retrieval_registry import RetrievalSetupError, build_production_tool_registry
 from agent.system_prompt import (
     REFUSAL_TEXT,
     STATUS_ANSWERED,
@@ -72,51 +74,48 @@ def get_api_key(env=None, dotenv_path=".env"):
     return value
 
 
-def create_anthropic_client(env=None, dotenv_path=".env"):
-    """Create the real Anthropic client, or raise a UI-safe setup error."""
-    api_key = get_api_key(env=env, dotenv_path=dotenv_path)
-    if not api_key:
-        raise TechnicalSetupError(MISSING_API_KEY_MESSAGE)
+def _load_dotenv_values(path):
+    env_path = Path(path)
+    if not env_path.exists():
+        return {}
+    values = {}
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, value = line.split("=", 1)
+        values[name.strip()] = value.strip().strip("\"'")
+    return values
 
+
+def _merged_env(env=None, dotenv_path=".env"):
+    values = _load_dotenv_values(dotenv_path)
+    if env is not None:
+        values.update(env)
+    return values
+
+
+def create_model_client(env=None, dotenv_path=".env", provider_factory=None):
     try:
-        from anthropic import Anthropic
-    except Exception as exc:
-        raise TechnicalSetupError(f"שגיאת הגדרה טכנית: ספריית anthropic אינה זמינה: {exc}") from exc
+        return create_provider_manager(
+            env=_merged_env(env=env, dotenv_path=dotenv_path),
+            provider_factory=provider_factory,
+        )
+    except ProviderConfigurationError as exc:
+        raise TechnicalSetupError(MISSING_API_KEY_MESSAGE) from exc
 
-    return Anthropic(api_key=api_key)
+
+def create_anthropic_client(env=None, dotenv_path=".env"):
+    return create_model_client(env=env, dotenv_path=dotenv_path)
+
 
 
 def build_default_tool_registry():
-    """Wire real retrieval tools when Person 1/2 implementations exist.
-
-    Until those modules expose the expected callables, fail explicitly
-    instead of returning fixture data in the production UI.
-    """
+    """Wire the real retrieval tools through production adapters."""
     try:
-        from tools import course_tools, text_tools
-    except Exception as exc:
+        return build_production_tool_registry()
+    except RetrievalSetupError as exc:
         raise TechnicalSetupError(f"{TOOLS_NOT_READY_MESSAGE} {exc}") from exc
-
-    names = {
-        "list_sections": text_tools,
-        "get_section": text_tools,
-        "search": text_tools,
-        "list_curricula": course_tools,
-        "get_course_table": course_tools,
-        "get_course": course_tools,
-    }
-    registry = {}
-    missing = []
-    for name, module in names.items():
-        func = getattr(module, name, None)
-        if callable(func):
-            registry[name] = func
-        else:
-            missing.append(name)
-
-    if missing:
-        raise TechnicalSetupError(f"{TOOLS_NOT_READY_MESSAGE} חסרים: {', '.join(missing)}")
-    return registry
 
 
 def _format_source_ref(citation):
@@ -250,7 +249,7 @@ def prepare_display(policy, *, loop_result=None, metrics=None):
 def run_agent_for_ui(question, *, client=None, tool_registry=None):
     """Run client -> agent loop -> policy -> display model for Streamlit."""
     try:
-        active_client = client or create_anthropic_client()
+        active_client = client or create_model_client()
         active_registry = tool_registry or build_default_tool_registry()
         loop_result = answer_question(
             question,
