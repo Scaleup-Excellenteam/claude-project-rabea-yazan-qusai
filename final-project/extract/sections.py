@@ -10,10 +10,10 @@ section ids, preserving original page references. Does not touch
 SQLite/FTS5 (index/build_fts.py) or the public tools (tools/text_tools.py)
 - see those modules for the next steps.
 
-Heading detection here is a conservative heuristic (short line, no
-trailing sentence punctuation). It has not been validated against the
-real project PDFs yet (they are not available in this repository), so
-it will likely need tuning once real documents are checked in.
+Heading detection is deliberately conservative and informed by the real
+yearbook and regulations PDFs.  In particular, table rows, course
+metadata, page footers, and table-of-contents pages are not promoted to
+searchable sections.
 """
 
 from __future__ import annotations
@@ -23,9 +23,30 @@ from dataclasses import dataclass
 
 from extract.pdf_text import PageText
 
-_HEADING_MAX_CHARS = 60
-_HEADING_MAX_WORDS = 8
-_HEADING_END_PUNCTUATION = (".",)
+_HEADING_MAX_CHARS = 75
+_HEADING_MAX_WORDS = 10
+_HEADING_END_PUNCTUATION = (".", ",", ";", ":")
+
+_PAGE_NUMBER_RE = re.compile(r"^\s*\d+\s*$")
+_COURSE_ROW_RE = re.compile(r"^\s*\d{6,7}(?:\s|,)")
+_TOTAL_RE = re.compile(r'^\s*סה["״]?כ\b')
+_DOTTED_TOC_RE = re.compile(r"\.{5,}\s*\d+\s*$")
+_NUMBERED_ITEM_RE = re.compile(r"^\s*\d+[.)]\s+")
+_LEADING_NUMERIC_RE = re.compile(r"^\s*\d")
+_COURSE_METADATA_RE = re.compile(r'\b(?:ש["״]ס|נ["״]ז)\b')
+_INSTRUCTOR_RE = re.compile(r"^(?:ד[\"״]ר|פרופ(?:סור)?['׳]?|מר |הגב['׳]? |גב['׳]? )")
+_TABLE_HEADER_WORDS = frozenset({"ה", "ז ה", "קורס", "מס' קורס שם קורס נקודות זכות"})
+_STRONG_HEADING_WORDS = (
+    "לימודים", "תכנית", "תוכנית", "תכניות", "תוכניות", "קורסים",
+    "קורסי", "מסלול", "דרישות", "תנאי", "זכאות", "הצטיינות",
+    "רישום", "נקודות זכות", "מבוא", "פרויקט", "מלגות", "מקבצי",
+    "הפסקת", "הפסקו", "חזרה", "ציון", "נוכחות", "השתתפות",
+    "התנהלות", "מעקב", "השמטה", "עדכון", "שומעים", "מתכונת",
+    "הערכת", "ערעור", "פטור", "תוכן עניינים", "פירוט", "פרק",
+    "תואר", "אי ", "מעבר", "אחסון", "פרישה", "ה שהיית", "השהיית",
+    "סיום", "ימי ", "רשימת",
+    "מערכת", "למתחילים", "שנה ", "קבלת", "צבירת",
+)
 
 _SLUG_KEEP_RE = re.compile(r"[^\w֐-׿]+", re.UNICODE)
 
@@ -46,8 +67,29 @@ class Section:
     text_quality_notes: str | None
 
 
-def _looks_like_heading(line: str) -> bool:
+def _is_table_or_metadata_line(line: str) -> bool:
+    return bool(
+        _PAGE_NUMBER_RE.fullmatch(line)
+        or _COURSE_ROW_RE.match(line)
+        or _TOTAL_RE.match(line)
+        or _DOTTED_TOC_RE.search(line)
+        or _COURSE_METADATA_RE.search(line)
+        or _INSTRUCTOR_RE.match(line)
+        or line in _TABLE_HEADER_WORDS
+        or line.startswith(("סוג שיעור:", "דרישות קדם:", "מס' ", "•"))
+    )
+
+
+def _looks_like_heading(
+    line: str,
+    next_line: str = "",
+    *,
+    real_document: bool = False,
+    table_heavy: bool = False,
+) -> bool:
     if not line:
+        return False
+    if _is_table_or_metadata_line(line):
         return False
     if len(line) > _HEADING_MAX_CHARS:
         return False
@@ -55,7 +97,33 @@ def _looks_like_heading(line: str) -> bool:
         return False
     if line.endswith(_HEADING_END_PUNCTUATION):
         return False
-    return True
+    # Numbered lines in these PDFs are overwhelmingly requirements, lists,
+    # or table content.  Primary headings are available from the TOC and do
+    # not need this weak signal.
+    if _NUMBERED_ITEM_RE.match(line):
+        return False
+    if _LEADING_NUMERIC_RE.match(line):
+        return False
+    if line.startswith("דרישות לקורס מקביל"):
+        return False
+    if table_heavy and line.startswith("פרקים") and not _INSTRUCTOR_RE.match(next_line):
+        return False
+    if line.startswith(_STRONG_HEADING_WORDS):
+        return True
+    # Course-description titles are followed by an instructor line.
+    if next_line and _INSTRUCTOR_RE.match(next_line):
+        return True
+    if real_document:
+        return False
+    # Retain a small generic fallback for simple documents and headings such
+    # as "הערות": a short candidate must be followed by unmistakable prose.
+    return bool(next_line) and (len(next_line) > _HEADING_MAX_CHARS or next_line.endswith("."))
+
+
+def _is_toc_page(lines: list[str]) -> bool:
+    return bool(lines and lines[0].strip() == "תוכן עניינים" and sum(
+        bool(_DOTTED_TOC_RE.search(line)) for line in lines[1:]
+    ) >= 3)
 
 
 def _slugify(title: str) -> str:
@@ -116,6 +184,7 @@ def extract_sections(pages: list[PageText]) -> list[Section]:
         return []
 
     source_id = pages[0].source_id
+    real_document = source_id in {"yearbook", "regulations"}
     for page in pages:
         if page.source_id != source_id:
             raise ValueError(
@@ -131,9 +200,13 @@ def extract_sections(pages: list[PageText]) -> list[Section]:
     for page in pages:
         if not page.has_text:
             continue
-        for raw_line in page.text.split("\n"):
-            line = raw_line.strip()
-            if not line:
+        page_lines = [line.strip() for line in page.text.split("\n") if line.strip()]
+        if _is_toc_page(page_lines):
+            continue
+        table_heavy = sum(bool(_COURSE_ROW_RE.match(line)) for line in page_lines) >= 2
+        for line_index, line in enumerate(page_lines):
+            next_line = page_lines[line_index + 1] if line_index + 1 < len(page_lines) else ""
+            if _PAGE_NUMBER_RE.fullmatch(line):
                 continue
 
             if current is None:
@@ -143,10 +216,21 @@ def extract_sections(pages: list[PageText]) -> list[Section]:
                 next_order += 1
                 continue
 
-            if _looks_like_heading(line):
-                sections.append(current.build(source_id, seen_ids))
-                current = _SectionBuilder(line, page.page_number, next_order)
-                next_order += 1
+            if _looks_like_heading(
+                line,
+                next_line,
+                real_document=real_document,
+                table_heavy=table_heavy,
+            ):
+                if current.lines:
+                    sections.append(current.build(source_id, seen_ids))
+                    current = _SectionBuilder(line, page.page_number, next_order)
+                    next_order += 1
+                else:
+                    # Adjacent display headings are commonly a parent title
+                    # followed by its child.  Keep both without emitting an
+                    # empty FTS row.
+                    current.title = f"{current.title} — {line}"
                 continue
 
             current.add_line(line, page.page_number)

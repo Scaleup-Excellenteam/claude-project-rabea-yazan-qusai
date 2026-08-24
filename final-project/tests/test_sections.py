@@ -185,3 +185,75 @@ def test_single_source_id_does_not_raise() -> None:
     sections = extract_sections(pages)  # must not raise
 
     assert all(s.source_id == "yb" for s in sections)
+
+
+def test_real_pdf_noise_stays_body_instead_of_becoming_headings() -> None:
+    pages = [_page(
+        "yearbook",
+        9,
+        "מערכת לימודים מוצעת לקורסי החובה\n"
+        "0111100 מבוא לחדו\"א 0 4 2 - 6\n"
+        "סה\"כ 20 19 10 3 32\n"
+        "9",
+    )]
+
+    sections = extract_sections(pages)
+
+    assert [s.title for s in sections] == ["מערכת לימודים מוצעת לקורסי החובה"]
+    assert "0111100" in sections[0].text
+    assert "סה\"כ" in sections[0].text
+    assert "\n9" not in sections[0].text
+
+
+def test_course_metadata_and_instructor_are_body_under_course_title() -> None:
+    pages = [_page(
+        "yearbook",
+        25,
+        "מבוא לחדו\"א\n"
+        "הגב' אבו סאלח הנד (סמס' א')\n"
+        "0111100, 4 ש\"ס, 0 נ\"ז\n"
+        "סוג שיעור: הרצאה + 2 ש\"ס תרגיל\n"
+        "תיאור משמעותי של הקורס.",
+    )]
+
+    sections = extract_sections(pages)
+
+    assert len(sections) == 1
+    assert sections[0].title == "מבוא לחדו\"א"
+    assert "0111100" in sections[0].text
+    assert "סוג שיעור" in sections[0].text
+
+
+def test_toc_page_is_not_emitted_as_authoritative_prose() -> None:
+    pages = [
+        _page(
+            "regulations",
+            1,
+            "תוכן עניינים\n"
+            "מבוא ................................ 2\n"
+            "תנאי קבלה .......................... 3\n"
+            "זכאות לתואר ........................ 4",
+        ),
+        _page("regulations", 2, "מבוא\nזהו גוף משמעותי."),
+    ]
+
+    sections = extract_sections(pages)
+
+    assert [s.title for s in sections] == ["מבוא"]
+    assert sections[0].page_start == 2
+
+
+def test_consecutive_real_headings_do_not_create_empty_sections() -> None:
+    pages = [_page(
+        "yearbook",
+        4,
+        "תכניות הלימודים\n"
+        "תואר ראשון במסלול החד-חוגי\n"
+        "זהו גוף משמעותי.",
+    )]
+
+    sections = extract_sections(pages)
+
+    assert len(sections) == 1
+    assert sections[0].title == "תכניות הלימודים — תואר ראשון במסלול החד-חוגי"
+    assert sections[0].text == "זהו גוף משמעותי."

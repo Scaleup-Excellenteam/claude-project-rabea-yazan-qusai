@@ -193,6 +193,27 @@ def test_rebuilding_with_the_same_sections_does_not_duplicate_rows(db_path) -> N
     assert fts_count == 2
 
 
+def test_full_rebuild_removes_sections_absent_from_new_extraction(db_path) -> None:
+    first = [_section("yb:001:A"), _section("yb:002:B", page_start=2, page_end=2)]
+    build_index(db_path, first)
+
+    build_index(db_path, first[:1])
+
+    conn = sqlite3.connect(db_path)
+    try:
+        section_ids = conn.execute(
+            "SELECT section_id FROM sections ORDER BY section_id"
+        ).fetchall()
+        fts_ids = conn.execute(
+            "SELECT section_id FROM sections_fts ORDER BY section_id"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert section_ids == [("yb:001:A",)]
+    assert fts_ids == [("yb:001:A",)]
+
+
 def test_rebuild_with_updated_text_replaces_fts_row_not_appends(db_path) -> None:
     conn = sqlite3.connect(db_path)
     try:

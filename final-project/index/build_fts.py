@@ -80,14 +80,19 @@ def upsert_sections(conn: sqlite3.Connection, sections: Iterable[Section]) -> No
 
 
 def build_index(db_path: str | Path, sections: Iterable[Section]) -> None:
-    """Create the schema (if needed) and upsert all given sections.
+    """Create the schema and replace the index with the given sections.
 
-    Deterministic and safe to re-run: existing sections are replaced by
-    section_id rather than duplicated.
+    ``build_index`` represents a complete rebuild, so rows absent from the
+    new extraction must not survive as stale searchable sections.  Callers
+    that need incremental behavior can use ``upsert_sections`` directly.
     """
+    sections = list(sections)
     conn = sqlite3.connect(db_path)
     try:
         create_schema(conn)
+        with conn:
+            conn.execute("DELETE FROM sections_fts")
+            conn.execute("DELETE FROM sections")
         upsert_sections(conn, sections)
     finally:
         conn.close()
